@@ -116,7 +116,7 @@ fn create_window(
     shared_data: &SharedData,
     panic_proxy: &PanicProxyShared,
 ) -> Option<HWND> {
-    let window_data = Box::into_raw(Box::new(WindowData::new(shared_data, panic_proxy)));
+    let userdata = Box::into_raw(Box::new(UserData::new(shared_data, panic_proxy)));
     let hwnd = unsafe {
         winuser::CreateWindowExW(
             ex_style,
@@ -130,7 +130,7 @@ fn create_window(
             parent,
             menu,
             hinstance,
-            window_data.cast(),
+            userdata.cast(),
         )
     };
 
@@ -140,7 +140,7 @@ fn create_window(
             // `CreateWindowExW` sets the thread's last-error code to 0 upon success.
             // If the call to `CreateWindowExW` didn't succeed, then we assume that the window procedure
             // didn't get called, which means that we can't rely on the window procedure to drop our data.
-            drop(unsafe { Box::from_raw(window_data) });
+            drop(unsafe { Box::from_raw(userdata) });
             // This should be a log::error!() or an error return in real code
             eprintln!("Window creation failed with: {:#X}", last_error);
         }
@@ -175,38 +175,39 @@ unsafe extern "system" fn window_proc(
     if userdata_ptr == 0 {
         return unsafe { winuser::DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
-    let userdata_ptr = userdata_ptr as *mut WindowData;
+    let userdata_ptr = userdata_ptr as *mut UserData;
 
     // Turning `userdata_ptr` into a mutable reference may feel a bit iffy to some (myself included), but
     // this should be fine since the window procedure should only ever be called from the thread the window
     // it is associated with was created on.
     let userdata = unsafe { &mut *userdata_ptr };
-    userdata.inner.recurse_depth += 1;
-    let inner = &mut userdata.inner;
-    let mut ret = userdata
-        .panic_proxy
-        .catch_unwind(|| message_handler(inner, hwnd, msg, wparam, lparam))
+    let panic_proxy = &mut userdata.panic_proxy;
+    let window_data = &mut userdata.window_data;
+
+    window_data.recurse_depth += 1;
+    let mut ret = panic_proxy
+        .catch_unwind(|| message_handler(window_data, hwnd, msg, wparam, lparam))
         .unwrap_or(-1);
-    userdata.inner.recurse_depth -= 1;
+    window_data.recurse_depth -= 1;
 
     // `WM_NCDESTROY` *should* be the last message a window procedure receives before the window is destroyed
     // but as you'll see a bit further down, this isn't quite the reality.
     //
     // <https://docs.microsoft.com/en-us/windows/win32/winmsg/wm-ncdestroy>
     if msg == winuser::WM_NCDESTROY {
-        userdata.inner.destroyed = true;
+        window_data.destroyed = true;
         ret = 0;
     }
 
-    if let WindowDataInner {
+    if let WindowData {
         recurse_depth: 0,
         destroyed: true,
         ..
-    } = userdata.inner
+    } = window_data
     {
         // We can't drop the userdata immediately, as we may not be in the "outermost" call to the window
         // procedure when `WM_NCDESTROY` is received. This is why we track the `recurse_depth`, and only
-        // drop the userdata when we're certain that we are the only ones with a `&mut WindowData`.
+        // drop the userdata when we're certain that we are the only ones with a `&mut UserData`.
         //
         // There's an extra potential complication here that's explained in the following article by
         // Raymond Chen: <https://devblogs.microsoft.com/oldnewthing/20050727-16/?p=34793>.
@@ -215,7 +216,8 @@ unsafe extern "system" fn window_proc(
         // that would still leak a (tiny) bit of memory. Instead, we set the userdata pointer to 0, so that
         // subsequent calls to the window procedure will forward to `DefWindowProcW` and return immediately.
         unsafe {
-            drop(userdata);
+            drop(panic_proxy);
+            drop(window_data);
             winuser::SetWindowLongPtrW(hwnd, winuser::GWLP_USERDATA, 0);
             drop(Box::from_raw(userdata_ptr));
         }
@@ -225,7 +227,7 @@ unsafe extern "system" fn window_proc(
 }
 
 fn message_handler(
-    data: &mut WindowDataInner,
+    data: &mut WindowData,
     hwnd: HWND,
     msg: UINT,
     wparam: WPARAM,
@@ -235,16 +237,16 @@ fn message_handler(
     unsafe { winuser::DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-struct WindowData {
+struct UserData {
     panic_proxy: PanicProxyShared,
-    inner: WindowDataInner,
+    window_data: WindowData,
 }
 
-impl WindowData {
+impl UserData {
     fn new(shared: &SharedData, proxy: &PanicProxyShared) -> Self {
         Self {
             panic_proxy: Rc::clone(proxy),
-            inner: WindowDataInner {
+            window_data: WindowData {
                 recurse_depth: 0,
                 destroyed: false,
                 shared: Rc::clone(shared),
@@ -255,7 +257,7 @@ impl WindowData {
 }
 
 #[allow(dead_code)]
-struct WindowDataInner {
+struct WindowData {
     recurse_depth: usize,
     destroyed: bool,
     shared: SharedData,
