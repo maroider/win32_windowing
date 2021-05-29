@@ -1,0 +1,9 @@
+[package]
+name = "win32_windowing"
+version = "0.1.0"
+authors = ["Markus Røyset <maroider@protonmail.com>"]
+edition = "2018"
+
+[dependencies]
+widestring = "0.4.3"
+winapi = { version = "0.3.9", features = ["errhandlingapi", "libloaderapi", "winuser"] }
