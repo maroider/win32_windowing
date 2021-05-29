@@ -255,7 +255,19 @@ fn message_handler(
         _ => None,
     };
 
-    ret.unwrap_or_else(|| unsafe { winuser::DefWindowProcW(hwnd, msg, wparam, lparam) })
+    ret.unwrap_or_else(|| unsafe {
+        cir(data, || winuser::DefWindowProcW(hwnd, msg, wparam, lparam))
+    })
+}
+
+/// Call indirectly recursing function.
+///
+/// Use this to call any function which might indirectly call back into the window procedure.
+/// This is done so that borrowchk can pretend that this indirect recursion is like regular
+/// recursion WRT to how mutable references behave. Passing around `&mut WindowData` without
+/// this trick would be unsound.
+fn cir<T>(_data: &mut WindowData, f: impl FnOnce() -> T) -> T {
+    f()
 }
 
 struct UserData {
@@ -311,18 +323,21 @@ impl PanicProxy {
     /// We avoid panicking across the FFI boundary by catching any panics with this method, and then resuming
     /// the unwind once we've gotten out of FFI-land.
     fn catch_unwind<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
-        // There are other strategies for deciding what do do when a panic has already occured,
-        // but simply not calling anything if a panic already has occured seemed like the
-        // simplest option.
         let panic = self.panic.take();
+        let result = if panic.is_none() {
+            Some(panic::catch_unwind(panic::AssertUnwindSafe(f)))
+        } else {
+            None
+        };
+
         if panic.is_none() {
-            match panic::catch_unwind(panic::AssertUnwindSafe(f)) {
+            result.and_then(|result| match result {
                 Ok(ok) => Some(ok),
                 Err(err) => {
                     self.panic.set(Some(err));
                     None
                 }
-            }
+            })
         } else {
             self.panic.set(panic);
             None
