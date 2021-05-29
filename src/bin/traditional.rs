@@ -218,8 +218,7 @@ unsafe extern "system" fn window_proc(
         // that would still leak a (tiny) bit of memory. Instead, we set the userdata pointer to 0, so that
         // subsequent calls to the window procedure will forward to `DefWindowProcW` and return immediately.
         unsafe {
-            drop(panic_proxy);
-            drop(window_data);
+            drop(userdata);
             winuser::SetWindowLongPtrW(hwnd, winuser::GWLP_USERDATA, 0);
             drop(Box::from_raw(userdata_ptr));
         }
