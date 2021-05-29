@@ -180,8 +180,13 @@ unsafe extern "system" fn window_proc(
     let userdata_ptr = userdata_ptr as *mut UserData;
 
     // Turning `userdata_ptr` into a mutable reference may feel a bit iffy to some (myself included), but
-    // this should be fine since the window procedure should only ever be called from the thread the window
-    // it is associated with was created on.
+    // this should be fine give the following:
+    // 1. The window procedure should only ever be called from the thread the window it is associated with
+    //    was created on.
+    // 2. We meticulously give `borrowchk` extra data so it can tell when we're passing the data along to an
+    //    "inner" invocation of the window procedure. This is a bit cumbersome, but the alternative is to
+    //    only use immutable references and something that provides interior mutability, like a `Mutex` or a
+    //    `RefCell`. You can decide for yourself which alternative is the most cumbersome.
     let userdata = unsafe { &mut *userdata_ptr };
     let panic_proxy = &mut userdata.panic_proxy;
     let window_data = &mut userdata.window_data;
