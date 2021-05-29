@@ -23,7 +23,9 @@ fn main() {
     let class_name = U16CString::from_str("My Window Class").unwrap();
     let class = register_window_class(&class_name, hinstance);
 
-    let shared_data = Rc::new(Data {});
+    let shared_data = Rc::new(Data {
+        window_count: Cell::new(0),
+    });
     let panic_proxy = Rc::new(PanicProxy::new());
 
     let window_name = U16CString::from_str("My Window").unwrap();
@@ -234,7 +236,27 @@ fn message_handler(
     lparam: LPARAM,
 ) -> LRESULT {
     println!("{}: {}", data.recurse_depth, dbg_msg(msg));
-    unsafe { winuser::DefWindowProcW(hwnd, msg, wparam, lparam) }
+
+    let ret = match msg {
+        winuser::WM_NCCREATE => {
+            data.shared
+                .window_count
+                .set(data.shared.window_count.get() + 1);
+            None
+        }
+        winuser::WM_NCDESTROY => {
+            data.shared
+                .window_count
+                .set(data.shared.window_count.get() - 1);
+            if data.shared.window_count.get() == 0 {
+                unsafe { winuser::PostQuitMessage(0) };
+            }
+            None
+        }
+        _ => None,
+    };
+
+    ret.unwrap_or_else(|| unsafe { winuser::DefWindowProcW(hwnd, msg, wparam, lparam) })
 }
 
 struct UserData {
@@ -269,7 +291,7 @@ struct WindowDataExtra {
 }
 
 struct Data {
-    //
+    window_count: Cell<usize>,
 }
 
 type SharedData = Rc<Data>;
