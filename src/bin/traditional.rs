@@ -279,7 +279,7 @@ fn message_handler(
 /// This is done so that borrowchk can pretend that this indirect recursion is like regular
 /// recursion WRT to how mutable references behave. Passing around `&mut WindowData` without
 /// this trick would be unsound.
-fn cir<T>(_data: &mut WindowData, f: impl FnOnce() -> T) -> T {
+fn cir<T>(_: &mut WindowData, f: impl FnOnce() -> T) -> T {
     f()
 }
 
