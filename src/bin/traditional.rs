@@ -273,7 +273,7 @@ fn message_handler(
     })
 }
 
-/// Call indirectly recursing function.
+/// Call an indirectly recursing function.
 ///
 /// Use this to call any function which might indirectly call back into the window procedure.
 /// This is done so that borrowchk can pretend that this indirect recursion is like regular
