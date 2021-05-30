@@ -179,23 +179,31 @@ unsafe extern "system" fn window_proc(
     }
     let userdata_ptr = userdata_ptr as *mut UserData;
 
-    // Turning `userdata_ptr` into a mutable reference may feel a bit iffy to some (myself included), but
-    // this should be fine give the following:
-    // 1. The window procedure should only ever be called from the thread the window it is associated with
-    //    was created on.
-    // 2. We meticulously give `borrowchk` extra data so it can tell when we're passing the data along to an
-    //    "inner" invocation of the window procedure. This is a bit cumbersome, but the alternative is to
-    //    only use immutable references and something that provides interior mutability, like a `Mutex` or a
-    //    `RefCell`. You can decide for yourself which alternative is the most cumbersome.
-    let userdata = unsafe { &mut *userdata_ptr };
-    let panic_proxy = &mut userdata.panic_proxy;
-    let window_data = &mut userdata.window_data;
+    // The reason we have this extra scope here is so that our `&PanicProxy` will get dropped before we
+    // have the chance to drop the userdata. If we didn't do this, we'd end up with a dangling reference,
+    // since it's impossible to make an immutable reference inaccessible by using `drop()` on it.
+    let (mut ret, window_data) = {
+        // Turning `userdata_ptr` into a mutable reference may feel a bit iffy to some (myself included), but
+        // this should be fine give the following:
+        // 1. The window procedure should only ever be called from the thread the window it is associated with
+        //    was created on.
+        // 2. We meticulously give `borrowchk` extra data so it can tell when we're passing the data along to an
+        //    "inner" invocation of the window procedure. This is a bit cumbersome, but the alternative is to
+        //    only use immutable references and something that provides interior mutability, like a `Mutex` or a
+        //    `RefCell`. You can decide for yourself which alternative is the most cumbersome.
+        // 3. We don't mutably access `panic_proxy`. `PanicProxy` uses a `Cell<T>` internally, so there's no need
+        //    to mutably access it in the first place.
+        let panic_proxy = unsafe { &(*userdata_ptr).panic_proxy };
+        let window_data = unsafe { &mut (*userdata_ptr).window_data };
 
-    window_data.recurse_depth += 1;
-    let mut ret = panic_proxy
-        .catch_unwind(|| message_handler(window_data, hwnd, msg, wparam, lparam))
-        .unwrap_or(-1);
-    window_data.recurse_depth -= 1;
+        window_data.recurse_depth += 1;
+        let ret = panic_proxy
+            .catch_unwind(|| message_handler(window_data, hwnd, msg, wparam, lparam))
+            .unwrap_or(-1);
+        window_data.recurse_depth -= 1;
+
+        (ret, window_data)
+    };
 
     // `WM_NCDESTROY` *should* be the last message a window procedure receives before the window is destroyed
     // but as you'll see a bit further down, this isn't quite the reality.
@@ -223,7 +231,7 @@ unsafe extern "system" fn window_proc(
         // that would still leak a (tiny) bit of memory. Instead, we set the userdata pointer to 0, so that
         // subsequent calls to the window procedure will forward to `DefWindowProcW` and return immediately.
         unsafe {
-            drop(userdata);
+            drop(window_data);
             winuser::SetWindowLongPtrW(hwnd, winuser::GWLP_USERDATA, 0);
             drop(Box::from_raw(userdata_ptr));
         }
