@@ -148,6 +148,7 @@ fn create_window(
         }
         None
     } else {
+        println!("Window Created");
         Some(hwnd)
     }
 }
