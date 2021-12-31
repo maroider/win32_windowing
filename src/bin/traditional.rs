@@ -196,6 +196,19 @@ unsafe extern "system" fn window_proc(
         let panic_proxy = unsafe { &(*userdata_ptr).panic_proxy };
         let window_data = unsafe { &mut (*userdata_ptr).window_data };
 
+        panic_proxy.catch_unwind(|| {
+            if window_data.recurse_depth != window_data.recurse_ack {
+                panic!(
+                    "Accidental reentrancy detected! {}",
+                    // Nested formatting because rustfmt becomes sad when this string is all in once piece.
+                    format!(
+                        "Recurse depth is {}, but the acknowledged depth is {}.",
+                        window_data.recurse_depth, window_data.recurse_ack,
+                    ),
+                );
+            }
+        });
+
         window_data.recurse_depth += 1;
         let ret = panic_proxy
             .catch_unwind(|| message_handler(window_data, hwnd, msg, wparam, lparam))
@@ -279,8 +292,11 @@ fn message_handler(
 /// This is done so that borrowchk can pretend that this indirect recursion is like regular
 /// recursion WRT to how mutable references behave. Passing around `&mut WindowData` without
 /// this trick would be unsound.
-fn cir<T>(_: &mut WindowData, f: impl FnOnce() -> T) -> T {
-    f()
+fn cir<T>(data: &mut WindowData, f: impl FnOnce() -> T) -> T {
+    data.recurse_ack += 1;
+    let ret = f();
+    data.recurse_ack -= 1;
+    ret
 }
 
 struct UserData {
@@ -294,6 +310,7 @@ impl UserData {
             panic_proxy: Rc::clone(proxy),
             window_data: WindowData {
                 recurse_depth: 0,
+                recurse_ack: 0,
                 destroyed: false,
                 shared: Rc::clone(shared),
                 extra: None,
@@ -305,6 +322,7 @@ impl UserData {
 #[allow(dead_code)]
 struct WindowData {
     recurse_depth: usize,
+    recurse_ack: usize,
     destroyed: bool,
     shared: SharedData,
     extra: Option<WindowDataExtra>,
